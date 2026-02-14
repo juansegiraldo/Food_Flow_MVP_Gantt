@@ -34,9 +34,9 @@ const CAT_LABELS = {
   alliance: "Alianzas Estratégicas",
 };
 
+// Cronograma final (versión definitiva — actividades tecnología actualizadas)
 const initialActivities = [
   { id: 1, name: "Web/app Shopify (setup inicial)", cat: "tech", start: 0, dur: 4 },
-  { id: 2, name: "Selección agencia desarrollo", cat: "tech", start: 0, dur: 2 },
   { id: 3, name: "Wireframes y arquitectura", cat: "tech", start: 2, dur: 2 },
   { id: 4, name: "Desarrollo frontend Shopify", cat: "tech", start: 4, dur: 2 },
   { id: 5, name: "Integración pagos Conekta", cat: "tech", start: 4, dur: 4 },
@@ -47,7 +47,7 @@ const initialActivities = [
   { id: 10, name: "Setup SAP Business One", cat: "tech", start: 12, dur: 4 },
   { id: 11, name: "App driver/stock (desarrollo)", cat: "tech", start: 14, dur: 4 },
   { id: 12, name: "Integración SAP ↔ Shopify", cat: "tech", start: 16, dur: 2 },
-  { id: 13, name: "QA integral y go-live", cat: "tech", start: 18, dur: 2 },
+  { id: 13, name: "QA integral y go-live", cat: "tech", start: 18, dur: 6 },
   { id: 14, name: "Selección agencia branding", cat: "brand", start: 0, dur: 2 },
   { id: 15, name: "Brief estratégico + naming", cat: "brand", start: 2, dur: 2 },
   { id: 16, name: "Diseño logotipo y sistema visual", cat: "brand", start: 4, dur: 2 },
