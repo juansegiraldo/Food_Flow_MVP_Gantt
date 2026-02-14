@@ -115,6 +115,7 @@ export default function GanttChart() {
   const [resizing, setResizing] = useState(null);
   const [linking, setLinking] = useState(null);
   const [linkMouse, setLinkMouse] = useState(null);
+  const [linkTargetId, setLinkTargetId] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState("");
   const [selectedCat, setSelectedCat] = useState("all");
@@ -144,6 +145,19 @@ export default function GanttChart() {
   const getBarY = (idx) => HEADER_HEIGHT + idx * ROW_HEIGHT + 8;
   const BAR_H = ROW_HEIGHT - 16;
 
+  const getActivityAtPoint = useCallback(
+    (mouseX, mouseY) => {
+      const rowIdx = Math.floor((mouseY - HEADER_HEIGHT) / ROW_HEIGHT);
+      if (rowIdx < 0 || rowIdx >= sortedActivities.length) return null;
+      const target = sortedActivities[rowIdx];
+      const targetBarX = getBarX(target);
+      const targetBarEnd = targetBarX + getBarW(target);
+      if (mouseX < targetBarX || mouseX > targetBarEnd) return null;
+      return target;
+    },
+    [sortedActivities]
+  );
+
   const handleMouseDown = (e, activity, action) => {
     e.stopPropagation();
     e.preventDefault();
@@ -166,6 +180,7 @@ export default function GanttChart() {
     const scrollTop = containerRef.current?.scrollTop || 0;
     setLinking({ fromId: activity.id, fromEnd: end });
     setLinkMouse({ x: e.clientX - svgRect.left + scrollLeft, y: e.clientY - svgRect.top + scrollTop });
+    setLinkTargetId(null);
   };
 
   const handleMouseMove = useCallback(
@@ -186,25 +201,36 @@ export default function GanttChart() {
         const newDur = Math.max(1, Math.round(resizing.origDur + dx / WEEK_WIDTH));
         setActivities((prev) => prev.map((a) => (a.id === resizing.id ? { ...a, dur: newDur } : a)));
       } else if (linking) {
-        setLinkMouse({ x: mouseX, y: mouseY });
+        const clampedX = Math.max(0, Math.min(totalWidth, mouseX));
+        const clampedY = Math.max(HEADER_HEIGHT, Math.min(totalHeight, mouseY));
+        setLinkMouse({ x: clampedX, y: clampedY });
+        const target = getActivityAtPoint(clampedX, clampedY);
+        setLinkTargetId(target && target.id !== linking.fromId ? target.id : null);
       }
     },
-    [dragging, resizing, linking]
+    [dragging, resizing, linking, totalWidth, totalHeight, getActivityAtPoint]
   );
 
   const handleMouseUp = useCallback(
     (e) => {
       if (linking) {
-        const svgRect = svgRef.current.getBoundingClientRect();
-        const scrollLeft = containerRef.current?.scrollLeft || 0;
-        const scrollTop = containerRef.current?.scrollTop || 0;
-        const mouseX = e.clientX - svgRect.left + scrollLeft;
-        const mouseY = e.clientY - svgRect.top + scrollTop;
+        if (svgRef.current && !svgRef.current.contains(e.target)) {
+          setLinking(null);
+          setLinkMouse(null);
+          setLinkTargetId(null);
+          setDragging(null);
+          setResizing(null);
+          return;
+        }
+        const svgRect = svgRef.current?.getBoundingClientRect();
+        if (svgRect) {
+          const scrollLeft = containerRef.current?.scrollLeft || 0;
+          const scrollTop = containerRef.current?.scrollTop || 0;
+          const mouseX = e.clientX - svgRect.left + scrollLeft;
+          const mouseY = e.clientY - svgRect.top + scrollTop;
 
-        const rowIdx = Math.floor((mouseY - HEADER_HEIGHT) / ROW_HEIGHT);
-        if (rowIdx >= 0 && rowIdx < sortedActivities.length) {
-          const target = sortedActivities[rowIdx];
-          if (target.id !== linking.fromId) {
+          const target = getActivityAtPoint(mouseX, mouseY);
+          if (target && target.id !== linking.fromId) {
             const targetBarX = getBarX(target);
             const targetBarEnd = targetBarX + getBarW(target);
             const targetMid = (targetBarX + targetBarEnd) / 2;
@@ -221,18 +247,30 @@ export default function GanttChart() {
       setResizing(null);
       setLinking(null);
       setLinkMouse(null);
+      setLinkTargetId(null);
     },
-    [linking, sortedActivities, deps]
+    [linking, deps, getActivityAtPoint]
   );
 
   useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape" && (linking || dragging || resizing)) {
+        setLinking(null);
+        setLinkMouse(null);
+        setLinkTargetId(null);
+        setDragging(null);
+        setResizing(null);
+      }
+    };
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("keydown", handleKeyDown);
     return () => {
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [handleMouseMove, handleMouseUp]);
+  }, [handleMouseMove, handleMouseUp, linking]);
 
   const addActivity = (cat) => {
     const maxId = activities.reduce((m, a) => Math.max(m, a.id), 0);
@@ -358,7 +396,34 @@ export default function GanttChart() {
     const fromBarY = getBarY(fromIdx) + BAR_H / 2;
     const x1 = linking.fromEnd === "end" ? fromBarEnd : fromBarX;
 
-    return <line x1={x1} y1={fromBarY} x2={linkMouse.x} y2={linkMouse.y} stroke={COLORS.brand} strokeWidth={2} strokeDasharray="4,4" />;
+    let x2 = linkMouse.x;
+    let y2 = linkMouse.y;
+    let previewType = null;
+    if (linkTargetId) {
+      const toIdx = getActivityRow(linkTargetId);
+      if (toIdx !== -1) {
+        const toA = sortedActivities[toIdx];
+        const toBarX = getBarX(toA);
+        const toBarEnd = toBarX + getBarW(toA);
+        const toBarY = getBarY(toIdx) + BAR_H / 2;
+        const toMid = (toBarX + toBarEnd) / 2;
+        const toEnd = linkMouse.x > toMid ? "end" : "start";
+        x2 = toEnd === "end" ? toBarEnd + 2 : toBarX - 2;
+        y2 = toBarY;
+        previewType = linking.fromEnd === "end" && toEnd === "start" ? "FS" : linking.fromEnd === "start" && toEnd === "start" ? "SS" : linking.fromEnd === "end" && toEnd === "end" ? "FF" : "SF";
+      }
+    }
+
+    return (
+      <g>
+        <line x1={x1} y1={fromBarY} x2={x2} y2={y2} stroke={COLORS.brand} strokeWidth={2} strokeDasharray="4,4" />
+        {previewType && (
+          <text x={(x1 + x2) / 2} y={Math.min(fromBarY, y2) - 6} textAnchor="middle" fill={COLORS.brand} fontSize={9} fontFamily="monospace" fontWeight={600}>
+            {previewType}
+          </text>
+        )}
+      </g>
+    );
   };
 
   return (
@@ -614,8 +679,8 @@ export default function GanttChart() {
                     height={BAR_H}
                     rx={4}
                     fill={color + "44"}
-                    stroke={color}
-                    strokeWidth={1.5}
+                    stroke={linking && linkTargetId === a.id ? COLORS.brand : color}
+                    strokeWidth={linking && linkTargetId === a.id ? 3 : 1.5}
                     style={{ cursor: "grab" }}
                     onMouseDown={(e) => handleMouseDown(e, a, "move")}
                     onMouseEnter={() => setTooltip({ id: a.id })}
@@ -650,7 +715,7 @@ export default function GanttChart() {
                     fill={THEME.bg}
                     stroke={color}
                     strokeWidth={1.5}
-                    style={{ cursor: "crosshair", opacity: tooltip?.id === a.id ? 1 : 0 }}
+                    style={{ cursor: "crosshair", opacity: tooltip?.id === a.id ? 1 : 0.85 }}
                     onMouseDown={(e) => handleLinkStart(e, a, "start")}
                   />
                   {/* Link circles - end */}
@@ -661,7 +726,7 @@ export default function GanttChart() {
                     fill={THEME.bg}
                     stroke={color}
                     strokeWidth={1.5}
-                    style={{ cursor: "crosshair", opacity: tooltip?.id === a.id ? 1 : 0 }}
+                    style={{ cursor: "crosshair", opacity: tooltip?.id === a.id ? 1 : 0.85 }}
                     onMouseDown={(e) => handleLinkStart(e, a, "end")}
                   />
                 </g>
