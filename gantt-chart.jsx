@@ -48,7 +48,7 @@ const initialActivities = [
   { id: 11, name: "App driver/stock (desarrollo)", cat: "tech", start: 14, dur: 4 },
   { id: 12, name: "Integración SAP ↔ Shopify", cat: "tech", start: 16, dur: 2 },
   { id: 13, name: "QA integral y go-live", cat: "tech", start: 18, dur: 6 },
-  { id: 14, name: "Selección agencia branding", cat: "brand", start: 0, dur: 2 },
+  { id: 14, name: "Kick-off BOOST", cat: "brand", start: 0, dur: 2 },
   { id: 15, name: "Brief estratégico + naming", cat: "brand", start: 2, dur: 2 },
   { id: 16, name: "Diseño logotipo y sistema visual", cat: "brand", start: 4, dur: 2 },
   { id: 17, name: "Manual de marca completo", cat: "brand", start: 6, dur: 2 },
