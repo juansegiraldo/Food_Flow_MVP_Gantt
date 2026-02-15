@@ -121,8 +121,36 @@ export default function GanttChart() {
   const [selectedCat, setSelectedCat] = useState("all");
   const [tooltip, setTooltip] = useState(null);
   const svgRef = useRef(null);
+  const bodySvgRef = useRef(null);
   const containerRef = useRef(null);
+  const headerScrollRef = useRef(null);
   const fileInputRef = useRef(null);
+
+  // Sync horizontal scroll between header (months/weeks) and chart body
+  useEffect(() => {
+    const headerEl = headerScrollRef.current;
+    const bodyEl = containerRef.current;
+    if (!headerEl || !bodyEl) return;
+    let syncing = false;
+    const syncFromHeader = () => {
+      if (syncing) return;
+      syncing = true;
+      bodyEl.scrollLeft = headerEl.scrollLeft;
+      syncing = false;
+    };
+    const syncFromBody = () => {
+      if (syncing) return;
+      syncing = true;
+      headerEl.scrollLeft = bodyEl.scrollLeft;
+      syncing = false;
+    };
+    headerEl.addEventListener("scroll", syncFromHeader);
+    bodyEl.addEventListener("scroll", syncFromBody);
+    return () => {
+      headerEl.removeEventListener("scroll", syncFromHeader);
+      bodyEl.removeEventListener("scroll", syncFromBody);
+    };
+  }, []);
 
   const filtered = selectedCat === "all" ? activities : activities.filter((a) => a.cat === selectedCat);
   const sortedActivities = [...filtered].sort((a, b) => {
@@ -143,11 +171,13 @@ export default function GanttChart() {
   const getBarX = (a) => a.start * WEEK_WIDTH;
   const getBarW = (a) => Math.max(a.dur * WEEK_WIDTH - 4, 12);
   const getBarY = (idx) => HEADER_HEIGHT + idx * ROW_HEIGHT + 8;
+  const getBarYBody = (idx) => idx * ROW_HEIGHT + 8;
   const BAR_H = ROW_HEIGHT - 16;
+  const bodyHeight = totalHeight - HEADER_HEIGHT;
 
   const getActivityAtPoint = useCallback(
     (mouseX, mouseY) => {
-      const rowIdx = Math.floor((mouseY - HEADER_HEIGHT) / ROW_HEIGHT);
+      const rowIdx = Math.floor(mouseY / ROW_HEIGHT);
       if (rowIdx < 0 || rowIdx >= sortedActivities.length) return null;
       const target = sortedActivities[rowIdx];
       const targetBarX = getBarX(target);
@@ -161,7 +191,7 @@ export default function GanttChart() {
   const handleMouseDown = (e, activity, action) => {
     e.stopPropagation();
     e.preventDefault();
-    const svgRect = svgRef.current.getBoundingClientRect();
+    const svgRect = bodySvgRef.current.getBoundingClientRect();
     const scrollLeft = containerRef.current?.scrollLeft || 0;
     const startMouseX = e.clientX - svgRect.left + scrollLeft;
 
@@ -175,22 +205,21 @@ export default function GanttChart() {
   const handleLinkStart = (e, activity, end) => {
     e.stopPropagation();
     e.preventDefault();
-    const svgRect = svgRef.current.getBoundingClientRect();
+    const svgRect = bodySvgRef.current.getBoundingClientRect();
     const scrollLeft = containerRef.current?.scrollLeft || 0;
-    const scrollTop = containerRef.current?.scrollTop || 0;
     setLinking({ fromId: activity.id, fromEnd: end });
-    setLinkMouse({ x: e.clientX - svgRect.left + scrollLeft, y: e.clientY - svgRect.top + scrollTop });
+    const linkY = Math.max(0, Math.min(bodyHeight, e.clientY - svgRect.top));
+    setLinkMouse({ x: e.clientX - svgRect.left + scrollLeft, y: linkY });
     setLinkTargetId(null);
   };
 
   const handleMouseMove = useCallback(
     (e) => {
-      if (!svgRef.current) return;
-      const svgRect = svgRef.current.getBoundingClientRect();
+      if (!bodySvgRef.current) return;
+      const svgRect = bodySvgRef.current.getBoundingClientRect();
       const scrollLeft = containerRef.current?.scrollLeft || 0;
-      const scrollTop = containerRef.current?.scrollTop || 0;
       const mouseX = e.clientX - svgRect.left + scrollLeft;
-      const mouseY = e.clientY - svgRect.top + scrollTop;
+      const mouseY = e.clientY - svgRect.top;
 
       if (dragging) {
         const dx = mouseX - dragging.mouseStartX;
@@ -202,19 +231,19 @@ export default function GanttChart() {
         setActivities((prev) => prev.map((a) => (a.id === resizing.id ? { ...a, dur: newDur } : a)));
       } else if (linking) {
         const clampedX = Math.max(0, Math.min(totalWidth, mouseX));
-        const clampedY = Math.max(HEADER_HEIGHT, Math.min(totalHeight, mouseY));
+        const clampedY = Math.max(0, Math.min(bodyHeight, mouseY));
         setLinkMouse({ x: clampedX, y: clampedY });
         const target = getActivityAtPoint(clampedX, clampedY);
         setLinkTargetId(target && target.id !== linking.fromId ? target.id : null);
       }
     },
-    [dragging, resizing, linking, totalWidth, totalHeight, getActivityAtPoint]
+    [dragging, resizing, linking, totalWidth, bodyHeight, getActivityAtPoint]
   );
 
   const handleMouseUp = useCallback(
     (e) => {
       if (linking) {
-        if (svgRef.current && !svgRef.current.contains(e.target)) {
+        if (bodySvgRef.current && !bodySvgRef.current.contains(e.target)) {
           setLinking(null);
           setLinkMouse(null);
           setLinkTargetId(null);
@@ -222,12 +251,11 @@ export default function GanttChart() {
           setResizing(null);
           return;
         }
-        const svgRect = svgRef.current?.getBoundingClientRect();
+        const svgRect = bodySvgRef.current?.getBoundingClientRect();
         if (svgRect) {
           const scrollLeft = containerRef.current?.scrollLeft || 0;
-          const scrollTop = containerRef.current?.scrollTop || 0;
           const mouseX = e.clientX - svgRect.left + scrollLeft;
-          const mouseY = e.clientY - svgRect.top + scrollTop;
+          const mouseY = e.clientY - svgRect.top;
 
           const target = getActivityAtPoint(mouseX, mouseY);
           if (target && target.id !== linking.fromId) {
@@ -360,8 +388,8 @@ export default function GanttChart() {
       const fromBarEnd = fromBarX + getBarW(fromA);
       const toBarX = getBarX(toA);
       const toBarEnd = toBarX + getBarW(toA);
-      const fromBarY = getBarY(fromIdx) + BAR_H / 2;
-      const toBarY = getBarY(toIdx) + BAR_H / 2;
+      const fromBarY = getBarYBody(fromIdx) + BAR_H / 2;
+      const toBarY = getBarYBody(toIdx) + BAR_H / 2;
 
       if (d.type === "FS") { x1 = fromBarEnd + 2; x2 = toBarX - 2; }
       else if (d.type === "SS") { x1 = fromBarX - 2; x2 = toBarX - 2; }
@@ -393,7 +421,7 @@ export default function GanttChart() {
     const fromA = sortedActivities[fromIdx];
     const fromBarX = getBarX(fromA);
     const fromBarEnd = fromBarX + getBarW(fromA);
-    const fromBarY = getBarY(fromIdx) + BAR_H / 2;
+    const fromBarY = getBarYBody(fromIdx) + BAR_H / 2;
     const x1 = linking.fromEnd === "end" ? fromBarEnd : fromBarX;
 
     let x2 = linkMouse.x;
@@ -405,7 +433,7 @@ export default function GanttChart() {
         const toA = sortedActivities[toIdx];
         const toBarX = getBarX(toA);
         const toBarEnd = toBarX + getBarW(toA);
-        const toBarY = getBarY(toIdx) + BAR_H / 2;
+        const toBarY = getBarYBody(toIdx) + BAR_H / 2;
         const toMid = (toBarX + toBarEnd) / 2;
         const toEnd = linkMouse.x > toMid ? "end" : "start";
         x2 = toEnd === "end" ? toBarEnd + 2 : toBarX - 2;
@@ -542,75 +570,142 @@ export default function GanttChart() {
         <span>🗑 <b>Clic</b> en línea de dependencia = eliminar</span>
       </div>
 
-      {/* Main area */}
-      <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-        {/* Sidebar */}
-        <div style={{ width: SIDEBAR_WIDTH, flexShrink: 0, background: THEME.surface, borderRight: `1px solid ${THEME.border}`, overflow: "auto" }}>
-          <div style={{ height: HEADER_HEIGHT, display: "flex", alignItems: "flex-end", padding: "0 12px 8px", borderBottom: `1px solid ${THEME.border}` }}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: THEME.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>Actividad</span>
+      {/* Main area: single scroll container so sidebar and chart move together */}
+      <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
+          {/* Sticky row: "Actividad" + Mes/Semana (all stay visible on scroll) */}
+          <div
+            style={{
+              position: "sticky",
+              top: 0,
+              zIndex: 10,
+              display: "flex",
+              height: HEADER_HEIGHT,
+              background: THEME.surface,
+              borderBottom: `2px solid ${THEME.border}`,
+              boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+              flexShrink: 0,
+            }}
+          >
+            <div style={{ width: SIDEBAR_WIDTH, flexShrink: 0, display: "flex", alignItems: "flex-end", padding: "0 12px 8px" }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: THEME.textMuted, textTransform: "uppercase", letterSpacing: "0.05em" }}>Actividad</span>
+            </div>
+            <div ref={headerScrollRef} style={{ flex: 1, minWidth: 0, overflowX: "auto", overflowY: "hidden" }}>
+              <svg ref={svgRef} width={totalWidth} height={HEADER_HEIGHT} style={{ display: "block" }}>
+                {getMonthHeaders().map((m, i) => (
+                  <g key={`m-${i}`}>
+                    <rect x={m.startWeek * WEEK_WIDTH} y={0} width={m.weeks * WEEK_WIDTH} height={40} fill={THEME.surface} stroke={THEME.border} strokeWidth={1} />
+                    <text x={m.startWeek * WEEK_WIDTH + (m.weeks * WEEK_WIDTH) / 2} y={26} textAnchor="middle" fill={THEME.text} fontSize={13} fontWeight="600" fontFamily="'DM Sans', sans-serif">
+                      {m.label}
+                    </text>
+                  </g>
+                ))}
+                {Array.from({ length: WEEKS }).map((_, w) => (
+                  <text key={`wn-${w}`} x={w * WEEK_WIDTH + WEEK_WIDTH / 2} y={58} textAnchor="middle" fill={THEME.textMuted} fontSize={10} fontFamily="'DM Sans', sans-serif">
+                    S{w + 1}
+                  </text>
+                ))}
+                <line x1={0} y1={HEADER_HEIGHT} x2={totalWidth} y2={HEADER_HEIGHT} stroke={THEME.border} strokeWidth={1} />
+              </svg>
+            </div>
           </div>
-          {sortedActivities.map((a, i) => {
-            const isFirst = i === 0 || sortedActivities[i - 1].cat !== a.cat;
-            return (
-              <div key={a.id}>
-                {isFirst && (
-                  <div style={{ padding: "6px 12px", background: COLORS[a.cat] + "18", borderLeft: `3px solid ${COLORS[a.cat]}`, fontSize: 10, fontWeight: 700, color: COLORS[a.cat], textTransform: "uppercase", letterSpacing: "0.06em" }}>
-                    {CAT_LABELS[a.cat]}
-                  </div>
-                )}
-                <div
-                  style={{
-                    height: ROW_HEIGHT,
-                    display: "flex",
-                    alignItems: "center",
-                    padding: "0 12px",
-                    borderBottom: `1px solid ${THEME.borderLight}`,
-                    gap: 8,
-                    background: tooltip?.id === a.id ? THEME.surfaceHover : "transparent",
-                  }}
-                  onMouseEnter={() => setTooltip({ id: a.id })}
-                  onMouseLeave={() => setTooltip(null)}
-                >
-                  <div style={{ width: 4, height: 20, borderRadius: 2, background: COLORS[a.cat], flexShrink: 0 }} />
-                  {editingId === a.id ? (
-                    <input
-                      value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
-                      onBlur={saveEdit}
-                      onKeyDown={(e) => e.key === "Enter" && saveEdit()}
-                      autoFocus
-                      style={{ flex: 1, background: THEME.bg, border: `1px solid ${THEME.border}`, borderRadius: 4, padding: "2px 6px", color: THEME.text, fontSize: 12, fontFamily: "inherit", outline: "none" }}
-                    />
-                  ) : (
-                    <span
-                      onDoubleClick={() => startEdit(a)}
-                      style={{ flex: 1, fontSize: 12, color: THEME.textSecondary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "text" }}
-                      title={a.name}
-                    >
-                      {a.name}
-                    </span>
-                  )}
-                  <span style={{ fontSize: 10, color: THEME.textMuted, flexShrink: 0 }}>S{a.start + 1}-{a.start + a.dur}</span>
-                  {tooltip?.id === a.id && (
-                    <button
-                      onClick={() => deleteActivity(a.id)}
-                      style={{ width: 20, height: 20, borderRadius: 4, border: "none", background: "#B91C1C", color: "#fff", cursor: "pointer", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontFamily: "inherit" }}
-                    >
-                      ×
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
 
-        {/* Chart area */}
-        <div ref={containerRef} style={{ flex: 1, overflow: "auto", position: "relative" }}>
-          <svg
-            ref={svgRef}
+          {/* Scrollable content: activity list + chart body */}
+          <div style={{ display: "flex", height: bodyHeight + 20, minHeight: bodyHeight + 20 }}>
+            {/* Sidebar: list only (no header) */}
+            <div style={{ width: SIDEBAR_WIDTH, flexShrink: 0, background: THEME.surface, borderRight: `1px solid ${THEME.border}`, overflow: "hidden" }}>
+              <div style={{ height: bodyHeight + 20, position: "relative" }}>
+                {/* Category blocks behind rows (same as chart) */}
+                {["tech", "brand", "legal", "alliance"].map((cat) => {
+                  let firstIdx = -1;
+                  let lastIdx = -1;
+                  sortedActivities.forEach((a, i) => {
+                    if (a.cat === cat) {
+                      if (firstIdx === -1) firstIdx = i;
+                      lastIdx = i;
+                    }
+                  });
+                  if (firstIdx === -1 || lastIdx === -1) return null;
+                  return (
+                    <div
+                      key={`sidebar-cat-${cat}`}
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        right: 0,
+                        top: firstIdx * ROW_HEIGHT,
+                        height: (lastIdx - firstIdx + 1) * ROW_HEIGHT,
+                        background: COLORS[cat] + "12",
+                        borderBottom: `1px solid ${COLORS[cat]}30`,
+                        pointerEvents: "none",
+                      }}
+                    />
+                  );
+                })}
+                {sortedActivities.map((a, i) => {
+                  const isFirstInCat = i === 0 || sortedActivities[i - 1].cat !== a.cat;
+                  return (
+                    <div
+                      key={a.id}
+                      style={{
+                        height: ROW_HEIGHT,
+                        display: "flex",
+                        alignItems: "center",
+                        padding: "0 12px",
+                        borderBottom: `1px solid ${THEME.borderLight}`,
+                        gap: 8,
+                        background: tooltip?.id === a.id ? THEME.surfaceHover : "transparent",
+                        borderLeft: isFirstInCat ? `3px solid ${COLORS[a.cat]}` : undefined,
+                      }}
+                      onMouseEnter={() => setTooltip({ id: a.id })}
+                      onMouseLeave={() => setTooltip(null)}
+                    >
+                      <div style={{ width: 4, height: 20, borderRadius: 2, background: COLORS[a.cat], flexShrink: 0 }} />
+                      {editingId === a.id ? (
+                        <input
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          onBlur={saveEdit}
+                          onKeyDown={(e) => e.key === "Enter" && saveEdit()}
+                          autoFocus
+                          style={{ flex: 1, background: THEME.bg, border: `1px solid ${THEME.border}`, borderRadius: 4, padding: "2px 6px", color: THEME.text, fontSize: 12, fontFamily: "inherit", outline: "none" }}
+                        />
+                      ) : (
+                        <span
+                          onDoubleClick={() => startEdit(a)}
+                          style={{ flex: 1, fontSize: 12, color: THEME.textSecondary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "text" }}
+                          title={a.name}
+                        >
+                          {isFirstInCat && (
+                            <span style={{ fontSize: 9, fontWeight: 700, color: COLORS[a.cat], textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 6 }}>
+                              {CAT_LABELS[a.cat].split(" ")[0]}:
+                            </span>
+                          )}
+                          {a.name}
+                        </span>
+                      )}
+                      <span style={{ fontSize: 10, color: THEME.textMuted, flexShrink: 0 }}>S{a.start + 1}-{a.start + a.dur}</span>
+                      {tooltip?.id === a.id && (
+                        <button
+                          onClick={() => deleteActivity(a.id)}
+                          style={{ width: 20, height: 20, borderRadius: 4, border: "none", background: "#B91C1C", color: "#fff", cursor: "pointer", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontFamily: "inherit" }}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+                <div style={{ height: 20 }} />
+              </div>
+            </div>
+
+            {/* Chart body: horizontal scroll synced with header */}
+            <div ref={containerRef} style={{ flex: 1, minWidth: 0, overflowX: "auto", overflowY: "hidden", position: "relative" }}>
+              <svg
+            ref={bodySvgRef}
             width={totalWidth}
-            height={totalHeight}
+            height={bodyHeight}
             style={{ display: "block", cursor: dragging ? "grabbing" : resizing ? "ew-resize" : "default" }}
           >
             <defs>
@@ -623,55 +718,58 @@ export default function GanttChart() {
               </linearGradient>
             </defs>
 
-            {/* Background */}
-            <rect width={totalWidth} height={totalHeight} fill={THEME.bg} />
+            <rect width={totalWidth} height={bodyHeight} fill={THEME.bg} />
 
-            {/* Week columns */}
+            {/* Category blocks: shadow from first to last activity of each category */}
+            {["tech", "brand", "legal", "alliance"].map((cat) => {
+              let firstIdx = -1;
+              let lastIdx = -1;
+              sortedActivities.forEach((a, i) => {
+                if (a.cat === cat) {
+                  if (firstIdx === -1) firstIdx = i;
+                  lastIdx = i;
+                }
+              });
+              if (firstIdx === -1 || lastIdx === -1) return null;
+              const y = firstIdx * ROW_HEIGHT;
+              const h = (lastIdx - firstIdx + 1) * ROW_HEIGHT;
+              return (
+                <rect
+                  key={`cat-${cat}`}
+                  x={0}
+                  y={y}
+                  width={totalWidth}
+                  height={h}
+                  fill={COLORS[cat] + "12"}
+                  stroke={COLORS[cat] + "30"}
+                  strokeWidth={1}
+                  strokeDasharray="0"
+                />
+              );
+            })}
+
             {Array.from({ length: WEEKS }).map((_, w) => (
               <g key={`w-${w}`}>
-                <rect x={w * WEEK_WIDTH} y={HEADER_HEIGHT} width={WEEK_WIDTH} height={totalHeight - HEADER_HEIGHT} fill={w % 2 === 0 ? THEME.bg : THEME.bgAlt} />
-                <line x1={w * WEEK_WIDTH} y1={HEADER_HEIGHT} x2={w * WEEK_WIDTH} y2={totalHeight} stroke={THEME.borderLight} strokeWidth={1} />
+                <rect x={w * WEEK_WIDTH} y={0} width={WEEK_WIDTH} height={bodyHeight} fill={w % 2 === 0 ? THEME.bg : THEME.bgAlt} />
+                <line x1={w * WEEK_WIDTH} y1={0} x2={w * WEEK_WIDTH} y2={bodyHeight} stroke={THEME.borderLight} strokeWidth={1} />
               </g>
             ))}
 
-            {/* Month headers */}
-            {getMonthHeaders().map((m, i) => (
-              <g key={`m-${i}`}>
-                <rect x={m.startWeek * WEEK_WIDTH} y={0} width={m.weeks * WEEK_WIDTH} height={40} fill={THEME.surface} stroke={THEME.border} strokeWidth={1} />
-                <text x={m.startWeek * WEEK_WIDTH + (m.weeks * WEEK_WIDTH) / 2} y={26} textAnchor="middle" fill={THEME.text} fontSize={13} fontWeight="600" fontFamily="'DM Sans', sans-serif">
-                  {m.label}
-                </text>
-              </g>
-            ))}
-
-            {/* Week numbers */}
-            {Array.from({ length: WEEKS }).map((_, w) => (
-              <text key={`wn-${w}`} x={w * WEEK_WIDTH + WEEK_WIDTH / 2} y={58} textAnchor="middle" fill={THEME.textMuted} fontSize={10} fontFamily="'DM Sans', sans-serif">
-                S{w + 1}
-              </text>
-            ))}
-
-            <line x1={0} y1={HEADER_HEIGHT} x2={totalWidth} y2={HEADER_HEIGHT} stroke={THEME.border} strokeWidth={1} />
-
-            {/* Row backgrounds */}
             {sortedActivities.map((a, i) => (
-              <rect key={`row-${a.id}`} x={0} y={HEADER_HEIGHT + i * ROW_HEIGHT} width={totalWidth} height={ROW_HEIGHT} fill={tooltip?.id === a.id ? THEME.surfaceHover : "transparent"} onMouseEnter={() => setTooltip({ id: a.id })} onMouseLeave={() => setTooltip(null)} />
+              <rect key={`row-${a.id}`} x={0} y={i * ROW_HEIGHT} width={totalWidth} height={ROW_HEIGHT} fill={tooltip?.id === a.id ? THEME.surfaceHover : "transparent"} onMouseEnter={() => setTooltip({ id: a.id })} onMouseLeave={() => setTooltip(null)} />
             ))}
 
-            {/* Dependency lines */}
             {renderDepLines()}
             {renderLinkingLine()}
 
-            {/* Bars */}
             {sortedActivities.map((a, i) => {
               const x = getBarX(a);
               const w = getBarW(a);
-              const y = getBarY(i);
+              const y = getBarYBody(i);
               const color = COLORS[a.cat];
 
               return (
                 <g key={`bar-${a.id}`}>
-                  {/* Bar body - draggable */}
                   <rect
                     x={x}
                     y={y}
@@ -686,17 +784,14 @@ export default function GanttChart() {
                     onMouseEnter={() => setTooltip({ id: a.id })}
                     onMouseLeave={() => setTooltip(null)}
                   />
-                  {/* Progress fill */}
                   <rect x={x + 1} y={y + 1} width={w - 2} height={BAR_H - 2} rx={3} fill={color} opacity={0.25} />
 
-                  {/* Label on bar */}
                   {w > 60 && (
                     <text x={x + 8} y={y + BAR_H / 2 + 4} fill={THEME.text} fontSize={10} fontWeight="500" fontFamily="'DM Sans', sans-serif" style={{ pointerEvents: "none" }}>
                       {a.name.length > Math.floor(w / 7) ? a.name.slice(0, Math.floor(w / 7)) + "…" : a.name}
                     </text>
                   )}
 
-                  {/* Resize handle (right edge) */}
                   <rect
                     x={x + w - 8}
                     y={y}
@@ -707,7 +802,6 @@ export default function GanttChart() {
                     onMouseDown={(e) => handleMouseDown(e, a, "resize")}
                   />
 
-                  {/* Link circles - start */}
                   <circle
                     cx={x - 1}
                     cy={y + BAR_H / 2}
@@ -718,7 +812,6 @@ export default function GanttChart() {
                     style={{ cursor: "crosshair", opacity: tooltip?.id === a.id ? 1 : 0.85 }}
                     onMouseDown={(e) => handleLinkStart(e, a, "start")}
                   />
-                  {/* Link circles - end */}
                   <circle
                     cx={x + w + 1}
                     cy={y + BAR_H / 2}
@@ -733,6 +826,8 @@ export default function GanttChart() {
               );
             })}
           </svg>
+            </div>
+          </div>
         </div>
       </div>
 
